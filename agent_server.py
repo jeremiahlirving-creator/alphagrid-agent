@@ -453,13 +453,16 @@ def analyze_bot(key: str, result: dict) -> dict:
         elif dd_used_pct >= 50:
             warnings.append(f"⚠️ DD {dd_used_pct:.0f}% used — monitor closely")
 
-    # Daily loss proximity
+    # Daily loss proximity — only warn if actual loss occurred
+    day_pnl = d.get("day_pnl", 0)
     day_loss_remaining = d.get("day_loss_remaining", None)
-    if day_loss_remaining is not None and day_loss_remaining < 0:
-        daily_cap = bot["daily_cap"]
-        loss_used_pct = abs(day_loss_remaining) / daily_cap * 100 if daily_cap else 0
+    daily_cap = bot["daily_cap"]
+    if day_pnl < 0 and daily_cap > 0:
+        loss_used_pct = abs(day_pnl) / daily_cap * 100
         if loss_used_pct >= 75:
-            warnings.append(f"⚠️ Daily loss {loss_used_pct:.0f}% of cap used")
+            warnings.append(f"⚠️ Daily loss {loss_used_pct:.0f}% of cap used (${abs(day_pnl):.0f} of ${daily_cap:.0f})")
+        elif loss_used_pct >= 50:
+            warnings.append(f"⚠️ Daily loss {loss_used_pct:.0f}% of cap used — monitor")
 
     # Kill switch status
     ks = d.get("kill_switches", {})
@@ -473,6 +476,20 @@ def analyze_bot(key: str, result: dict) -> dict:
     stale_feeds = [sym for sym, px in prices.items() if px == 0.0]
     if stale_feeds:
         warnings.append(f"⚠️ No price data: {', '.join(stale_feeds)}")
+
+    # HTF levels check — warn if All Night Bot has no levels set
+    # Without levels the sweep engine has nothing to trigger against
+    if key == "allnight":
+        levels_data = d.get("levels", {})
+        for inst, inst_data in levels_data.items():
+            lvls = inst_data.get("levels", {}) if isinstance(inst_data, dict) else {}
+            null_levels = [k for k, v in lvls.items() if v is None]
+            set_levels  = [k for k, v in lvls.items() if v is not None]
+            if not set_levels:
+                warnings.append(f"🚨 NO LEVELS SET ({inst}) — bot cannot fire without HTF levels. Push via dashboard or wait for TradingView Pine alerts.")
+            elif len(null_levels) >= 3:
+                missing = ", ".join(null_levels)
+                warnings.append(f"⚠️ Partial levels ({inst}): missing {missing} — some setups may not fire")
 
     # Consistency rule risk (no single day > 50% of total profits)
     if total_pnl > 0 and day_pnl > 0:
