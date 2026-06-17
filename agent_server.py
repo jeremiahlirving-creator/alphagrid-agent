@@ -110,51 +110,63 @@ class MarketDataEngine:
         self.data_ready = False
 
     async def fetch_history(self):
-        """Pull 20 days of ES, NQ, VIX daily OHLC from Yahoo Finance."""
+        """Pull 20 days of ES, NQ, VIX daily OHLC from Yahoo Finance (yfinance v1.x)."""
         try:
             import yfinance as yf
-            tickers = yf.download(
-                ["ES=F", "NQ=F", "^VIX"],
-                period="30d",
-                interval="1d",
-                group_by="ticker",
-                auto_adjust=True,
-                progress=False,
-                threads=True,
-            )
 
-            def extract(symbol):
+            def fetch_single(symbol: str) -> list[dict]:
+                """Fetch one ticker using Ticker.history() — works in yfinance v1.x."""
                 try:
-                    df = tickers[symbol][["High", "Low", "Close"]].dropna()
-                    df = df.tail(20)
-                    return [
-                        {
-                            "date":  str(idx.date()),
-                            "high":  round(float(row["High"]), 2),
-                            "low":   round(float(row["Low"]), 2),
-                            "close": round(float(row["Close"]), 2),
-                            "range": round(float(row["High"]) - float(row["Low"]), 2),
-                        }
-                        for idx, row in df.iterrows()
-                    ]
+                    t    = yf.Ticker(symbol)
+                    hist = t.history(period="30d", interval="1d", auto_adjust=True)
+                    if hist is None or hist.empty:
+                        logger.warning(f"⚠️ No data returned for {symbol}")
+                        return []
+                    hist = hist.tail(20)
+                    result = []
+                    for idx, row in hist.iterrows():
+                        try:
+                            h = float(row["High"])
+                            l = float(row["Low"])
+                            c = float(row["Close"])
+                            result.append({
+                                "date":  str(idx.date()),
+                                "high":  round(h, 2),
+                                "low":   round(l, 2),
+                                "close": round(c, 2),
+                                "range": round(h - l, 2),
+                            })
+                        except Exception:
+                            continue
+                    return result
                 except Exception as e:
-                    logger.warning(f"Extract error {symbol}: {e}")
+                    logger.warning(f"⚠️ Fetch error {symbol}: {e}")
                     return []
 
-            self.es_history  = extract("ES=F")
-            self.nq_history  = extract("NQ=F")
-            self.vix_history = extract("^VIX")
+            # Run all three fetches — each independent so one failure doesn't block others
+            loop = asyncio.get_event_loop()
+            es_data, nq_data, vix_data = await asyncio.gather(
+                loop.run_in_executor(None, fetch_single, "ES=F"),
+                loop.run_in_executor(None, fetch_single, "NQ=F"),
+                loop.run_in_executor(None, fetch_single, "^VIX"),
+            )
+
+            self.es_history  = es_data
+            self.nq_history  = nq_data
+            self.vix_history = vix_data
 
             if self.es_history:
-                self.data_ready       = True
-                self.last_fetch_date  = date.today()
-                logger.info(f"✅ Market data loaded: {len(self.es_history)} ES days, "
-                            f"{len(self.nq_history)} NQ days, {len(self.vix_history)} VIX days")
+                self.data_ready      = True
+                self.last_fetch_date = date.today()
+                logger.info(
+                    f"✅ Market data loaded: {len(self.es_history)} ES days, "
+                    f"{len(self.nq_history)} NQ days, {len(self.vix_history)} VIX days"
+                )
             else:
-                logger.warning("⚠️ yfinance returned empty ES history")
+                logger.warning("⚠️ yfinance returned empty ES history — ADR will show UNKNOWN")
 
         except ImportError:
-            logger.error("yfinance not installed — run: pip install yfinance")
+            logger.error("yfinance not installed — run: pip install yfinance==1.4.1")
         except Exception as e:
             logger.error(f"Market data fetch failed: {e}")
 
