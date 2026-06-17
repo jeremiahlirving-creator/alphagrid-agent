@@ -471,3 +471,30 @@ async def price_update(req: dict):
     if price > 0:
         regime.update(price)
     return {"ok": True}
+
+@app.post("/seed-regime")
+async def seed_regime(req: dict):
+    """
+    Seed the regime analyzer with historical daily data.
+    Format: {"days": [{"high": 5300.0, "low": 5250.0, "close": 5275.0}, ...]}
+    Oldest day first, most recent day last.
+    """
+    days = req.get("days", [])
+    if not days:
+        return {"ok": False, "error": "No days provided"}
+    
+    regime.daily_highs  = [float(d["high"])  for d in days]
+    regime.daily_lows   = [float(d["low"])   for d in days]
+    regime.daily_closes = [float(d["close"]) for d in days]
+    
+    # Recompute 5-day ADR
+    if len(regime.daily_highs) >= 5:
+        ranges = [h - l for h, l in zip(regime.daily_highs[-5:], regime.daily_lows[-5:])]
+        regime.adr_5day = sum(ranges) / len(ranges)
+    
+    return {
+        "ok": True,
+        "days_seeded": len(days),
+        "adr_5day": round(regime.adr_5day, 2) if regime.adr_5day else None,
+        "regime": regime.regime(),
+    }
