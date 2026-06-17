@@ -453,14 +453,13 @@ def analyze_bot(key: str, result: dict) -> dict:
         elif dd_used_pct >= 50:
             warnings.append(f"⚠️ DD {dd_used_pct:.0f}% used — monitor closely")
 
-    # Daily loss proximity — only warn if actual loss occurred
-    day_pnl = d.get("day_pnl", 0)
-    day_loss_remaining = d.get("day_loss_remaining", None)
+    # Daily loss proximity — only warn when real losses have occurred
+    day_pnl_val = d.get("day_pnl", 0)
     daily_cap = bot["daily_cap"]
-    if day_pnl < 0 and daily_cap > 0:
-        loss_used_pct = abs(day_pnl) / daily_cap * 100
+    if day_pnl_val < -10 and daily_cap > 0:  # only warn if lost more than $10
+        loss_used_pct = abs(day_pnl_val) / daily_cap * 100
         if loss_used_pct >= 75:
-            warnings.append(f"⚠️ Daily loss {loss_used_pct:.0f}% of cap used (${abs(day_pnl):.0f} of ${daily_cap:.0f})")
+            warnings.append(f"🚨 Daily loss {loss_used_pct:.0f}% of cap used (${abs(day_pnl_val):.0f} of ${daily_cap:.0f})")
         elif loss_used_pct >= 50:
             warnings.append(f"⚠️ Daily loss {loss_used_pct:.0f}% of cap used — monitor")
 
@@ -471,17 +470,23 @@ def analyze_bot(key: str, result: dict) -> dict:
         if active_ks:
             warnings.append(f"🔴 Kill switches active: {', '.join(active_ks)}")
 
-    # Price feed health — check last price
+    # Price feed health — only warn on active instruments (MES for allnight, MES/ES for ORB)
     prices = d.get("prices", {})
-    stale_feeds = [sym for sym, px in prices.items() if px == 0.0]
+    # Determine active instruments from bot health data
+    active = d.get("active_instruments", list(prices.keys()))
+    stale_feeds = [sym for sym, px in prices.items() if px == 0.0 and sym in active]
     if stale_feeds:
         warnings.append(f"⚠️ No price data: {', '.join(stale_feeds)}")
 
     # HTF levels check — warn if All Night Bot has no levels set
     # Without levels the sweep engine has nothing to trigger against
+    # Only check ACTIVE instruments — MNQ is inactive so skip it
     if key == "allnight":
         levels_data = d.get("levels", {})
+        active_insts = d.get("active_instruments", ["MES"])
         for inst, inst_data in levels_data.items():
+            if inst not in active_insts:
+                continue  # skip inactive instruments (MNQ)
             lvls = inst_data.get("levels", {}) if isinstance(inst_data, dict) else {}
             null_levels = [k for k, v in lvls.items() if v is None]
             set_levels  = [k for k, v in lvls.items() if v is not None]
@@ -714,14 +719,16 @@ async def health_check():
             f"Check Railway immediately."
         )
 
-    # Alert on critical warnings
-    for a in analyses:
-        critical = [w for w in a.get("warnings", []) if "🚨" in w]
-        if critical:
-            await send_telegram(
-                f"🚨 *CRITICAL WARNING — {a['name']}*\n" +
-                "\n".join(critical)
-            )
+    # Alert on critical warnings — only 6AM-10PM ET to avoid overnight spam
+    now_et = datetime.now(EST)
+    if 6 <= now_et.hour <= 22:
+        for a in analyses:
+            critical = [w for w in a.get("warnings", []) if "🚨" in w]
+            if critical:
+                await send_telegram(
+                    f"🚨 *CRITICAL WARNING — {a['name']}*\n" +
+                    "\n".join(critical)
+                )
 
 # ── SCHEDULER ─────────────────────────────────────────────────────────────────
 async def scheduler():
