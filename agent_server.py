@@ -470,13 +470,17 @@ def analyze_bot(key: str, result: dict) -> dict:
         if active_ks:
             warnings.append(f"🔴 Kill switches active: {', '.join(active_ks)}")
 
-    # Price feed health — only warn on active instruments (MES for allnight, MES/ES for ORB)
-    prices = d.get("prices", {})
-    # Determine active instruments from bot health data
-    active = d.get("active_instruments", list(prices.keys()))
-    stale_feeds = [sym for sym, px in prices.items() if px == 0.0 and sym in active]
-    if stale_feeds:
-        warnings.append(f"⚠️ No price data: {', '.join(stale_feeds)}")
+    # Price feed health — only warn during active trading hours (8PM-5PM ET next day)
+    # Outside those hours TV stops sending ticks and price = 0.0 is expected
+    now_et = datetime.now(EST)
+    h = now_et.hour
+    market_hours = h >= 18 or h < 17  # 6PM ET to 5PM ET next day (CME futures hours)
+    if market_hours:
+        prices = d.get("prices", {})
+        active = d.get("active_instruments", list(prices.keys()))
+        stale_feeds = [sym for sym, px in prices.items() if px == 0.0 and sym in active]
+        if stale_feeds:
+            warnings.append(f"⚠️ No price data: {', '.join(stale_feeds)}")
 
     # HTF levels check — warn if All Night Bot has no levels set
     # Without levels the sweep engine has nothing to trigger against
